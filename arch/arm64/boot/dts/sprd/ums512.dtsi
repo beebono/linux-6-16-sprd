@@ -40,7 +40,7 @@
 		reg = <0x0 0x80000000 0x0 0x80000000>;
 	};
 
-	reserved_memory {
+	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
@@ -162,32 +162,74 @@
 			};
 		};
 
+		ddrbist_reserved: ddrbist-mem@80000000 {
+			reg = <0x0 0x80000000 0x0 0x00001000>;
+			no-map;
+		};
+
+		sysdumpinfo_reserved: sysdumpinfo-mem@80001000 {
+			reg = <0x0 0x80001000 0x0 0x00001000>;
+			no-map;
+		};
+
 		audio_reserved: audio-mem@87400000 {
 			reg = <0x0 0x87400000 0x0 0x00400000>;
+			no-map;
 		};
 
 		sp_ddr_reserved: sp_ddr-mem@88000000 {
 			reg = <0x0 0x88000000 0x0 0x00300000>;
+			no-map;
 		};
 
 		audiodsp_reserved: audiodsp-mem@89000000 {
 			reg = <0x0 0x89000000 0x0 0x00600000>;
+			no-map;
 		};
 
 		cp_reserved: cp-mem@89600000 {
 			reg = <0x0 0x89600000 0x0 0x04900000>;
+			no-map;
 		};
 
 		smem_reserved: sipc-mem@8e000000 {
 			reg = <0x0 0x8e000000 0x0 0x00900000>;
+			no-map;
 		};
 
-		pstore_reserved: ramoops@fff80000 {
-			compatible = "ramoops";
-			reg = <0x0 0xfff80000 0x0 0x00040000>;
-			record-size = <0x8000>;
-			console-size = <0x8000>;
-			pmsg-size = <0x8000>;
+		iq_reserved: iq-mem@90000000 {
+			reg = <0x0 0x90000000 0x0 0x04000000>;
+			no-map;
+		};
+
+		sml_reserved: sml-mem@94000000 {
+			reg = <0x0 0x94000000 0x0 0x00040000>;
+			no-map;
+		};
+
+		tos_reserved: tos-mem@94040000 {
+			reg = <0x0 0x94040000 0x0 0x05fc0000>;
+			no-map;
+		};
+
+		sh_reserved: sh-mem@9a000000 {
+			reg = <0x0 0x9a000000 0x0 0x00100000>;
+			no-map;
+		};
+
+		uboot_log_reserved: uboot_log-mem@9de80000 {
+			reg = <0x0 0x9de80000 0x0 0x00080000>;
+			no-map;
+		};
+
+		sysdump_uboot_reserved: sysdump-uboot@9f000000 {
+			reg = <0x0 0x9f000000 0x0 0x01000000>;
+			no-map;
+		};
+
+		rebootescrow_reserved: rebootescrow@fff70000 {
+			reg = <0x0 0xfff70000 0x0 0x00010000>;
+			no-map;
 		};
 	};
 
@@ -1306,8 +1348,9 @@
 				reg = <0x20300000 0x800>;
 				interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&apahb_gate CLK_DISPC_EB>,
+					 <&ap_clk CLK_DISPC0>,
 					 <&ap_clk CLK_DISPC0_DPI>;
-				clock-names = "core", "dpi";
+				clock-names = "core", "clk", "dpi";
 				iommus = <&iommu_disp>;
 
 				status = "disabled";
@@ -1335,6 +1378,15 @@
 					     <GIC_SPI 31 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&apahb_gate CLK_DSI_EB>;
 				clock-names = "pclk";
+
+				/*
+				 * MIPI DPHY analog block glue. Mirrors stock
+				 * dphy node enable-syscon / power-syscon.
+				 * Driver sets phy-en bits to enable and clears
+				 * phy-pwr bit to power up the analog driver.
+				 */
+				sprd,phy-en-syscon = <&ap_ahb_regs 0x40 0x03>;
+				sprd,phy-pwr-syscon = <&ap_apb_regs 0x35c 0x08>;
 
 				status = "disabled";
 

@@ -4,9 +4,12 @@
  */
 
 #include <linux/component.h>
+#include <linux/delay.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
 #include <video/mipi_display.h>
 
 #include <drm/drm_atomic_helper.h>
@@ -67,6 +70,7 @@
 
 #define CMD_MODE_CFG 0x68
 #define TEAR_FX_EN BIT(0)
+#define CMD_MODE_LP_CMD_EN (GENMASK(14, 8) | GENMASK(19, 16) | BIT(24))
 
 #define GEN_HDR 0x6C
 #define GEN_DT GENMASK(5, 0)
@@ -745,6 +749,25 @@ static int sprd_dphy_init(struct dsi_context *ctx)
 	struct sprd_dsi *dsi = container_of(ctx, struct sprd_dsi, ctx);
 	int ret;
 
+	/*
+	 * Wake the DPHY analog block before touching any controller-side PHY
+	 * registers. Vendor BSP sharkl5pro/global_dphy.c does this as two
+	 * separate ops via dedicated phandles; we fold both into pre_enable.
+	 * Clearing the power-shutdown bit must come with the 100us settle
+	 * delay vendor describes ("dphy has a random wakeup failed after
+	 * poweron").  Without this the digital PLL still locks but the
+	 * lanes can't drive, the DSI never asserts ready, and the
+	 * DPU<->DSI halt handshake stalls forever.
+	 */
+	if (ctx->phy_en_syscon)
+		regmap_update_bits(ctx->phy_en_syscon, ctx->phy_en_offset,
+				   ctx->phy_en_mask, ctx->phy_en_mask);
+	if (ctx->phy_pwr_syscon) {
+		regmap_update_bits(ctx->phy_pwr_syscon, ctx->phy_pwr_offset,
+				   ctx->phy_pwr_mask, 0);
+		udelay(100);
+	}
+
 	dsi_reg_up(ctx, PHY_INTERFACE_CTRL, RF_PHY_RESET_N, 0);
 	dsi_reg_up(ctx, PHY_INTERFACE_CTRL, RF_PHY_SHUTDOWN, 0);
 	dsi_reg_up(ctx, PHY_INTERFACE_CTRL, RF_PHY_CLK_EN, 0);
@@ -827,12 +850,28 @@ static void sprd_dsi_bridge_mode_set(struct drm_bridge *bridge,
 	drm_display_mode_to_videomode(adj_mode, &dsi->ctx.vm);
 }
 
+static void sprd_dsi_reset(struct dsi_context *ctx)
+{
+	if (!ctx->rst_syscon)
+		return;
+
+	regmap_update_bits(ctx->rst_syscon, ctx->rst_offset,
+			   ctx->rst_mask, ctx->rst_mask);
+	udelay(10);
+	regmap_update_bits(ctx->rst_syscon, ctx->rst_offset,
+			   ctx->rst_mask, 0);
+	udelay(10);
+}
+
 static void sprd_dsi_bridge_pre_enable(struct drm_bridge *bridge)
 {
 	struct sprd_dsi *dsi = bridge_to_dsi(bridge);
 	struct dsi_context *ctx = &dsi->ctx;
 
 	clk_prepare_enable(ctx->clk);
+
+	/* clear the bootloader's pinned state, then fully re-init below */
+	sprd_dsi_reset(ctx);
 
 	sprd_dsi_init(ctx);
 	if (ctx->work_mode == DSI_MODE_VIDEO)
@@ -841,6 +880,14 @@ static void sprd_dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		sprd_dsi_edpi_video(ctx);
 
 	sprd_dphy_init(ctx);
+
+	/*
+	 * The vendor controller driver sends panel initialization commands in
+	 * low-power mode.  Program every generic/DCS command packet type here,
+	 * before the panel bridge's prepare callback starts issuing commands.
+	 */
+	dsi_reg_up(ctx, CMD_MODE_CFG, CMD_MODE_LP_CMD_EN,
+		   CMD_MODE_LP_CMD_EN);
 
 	/*
 	 * Initialize in command mode to allow panels to prepare by sending
@@ -855,6 +902,15 @@ static void sprd_dsi_bridge_enable(struct drm_bridge *bridge)
 	struct dsi_context *ctx = &dsi->ctx;
 
 	sprd_dsi_set_work_mode(ctx, ctx->work_mode);
+
+	/*
+	 * Vendor BSP power-cycles the controller (SOFT_RESET 0->1) right after
+	 * switching from cmd mode to video mode. This is what actually arms
+	 * the video pixel FSM: without it the controller stays in the cmd-mode
+	 * state where it accepts panel init writes but never streams DPI video
+	 * packets out to the panel. The DPU and DPHY both look fine, but no
+	 * pixels reach the panel.
+	 */
 	sprd_dsi_state_reset(ctx);
 
 	if (dsi->slave->mode_flags & MIPI_DSI_CLOCK_NON_CONTINUOUS) {
@@ -866,8 +922,6 @@ static void sprd_dsi_bridge_enable(struct drm_bridge *bridge)
 			   PHY_CLKLANE_TX_REQ_HS);
 		dphy_wait_pll_locked(ctx);
 	}
-
-	sprd_dpu_run(to_sprd_crtc(dsi->encoder.crtc));
 }
 
 static void sprd_dsi_bridge_disable(struct drm_bridge *bridge)
@@ -956,6 +1010,49 @@ static int sprd_dsi_context_init(struct sprd_dsi *dsi,
 	if (IS_ERR(ctx->regmap)) {
 		drm_err(dsi->drm, "dphy regmap init failed\n");
 		return PTR_ERR(ctx->regmap);
+	}
+
+	/* optional soft reset: reset-syscon = <&ap_ahb_regs offset mask> */
+	{
+		u32 args[2];
+
+		ctx->rst_syscon = syscon_regmap_lookup_by_phandle_args(dev->of_node,
+								       "reset-syscon",
+								       2, args);
+		if (IS_ERR(ctx->rst_syscon)) {
+			ctx->rst_syscon = NULL;
+		} else {
+			ctx->rst_offset = args[0];
+			ctx->rst_mask = args[1];
+		}
+	}
+
+	/*
+	 * DPHY analog block glue. See sprd_dphy_init for what these do.
+	 * Both are optional; absent on SoC variants that don't need them.
+	 */
+	{
+		u32 args[2];
+
+		ctx->phy_en_syscon = syscon_regmap_lookup_by_phandle_args(dev->of_node,
+									  "sprd,phy-en-syscon",
+									  2, args);
+		if (IS_ERR(ctx->phy_en_syscon)) {
+			ctx->phy_en_syscon = NULL;
+		} else {
+			ctx->phy_en_offset = args[0];
+			ctx->phy_en_mask = args[1];
+		}
+
+		ctx->phy_pwr_syscon = syscon_regmap_lookup_by_phandle_args(dev->of_node,
+									   "sprd,phy-pwr-syscon",
+									   2, args);
+		if (IS_ERR(ctx->phy_pwr_syscon)) {
+			ctx->phy_pwr_syscon = NULL;
+		} else {
+			ctx->phy_pwr_offset = args[0];
+			ctx->phy_pwr_mask = args[1];
+		}
 	}
 
 	ctx->data_hs2lp = 120;
