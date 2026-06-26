@@ -415,8 +415,14 @@ static int generic_panel_init_sequence(struct generic_panel *ctx)
  * u-boot's state. Flipping it to false is exactly what regressed the display
  * from the working #67 prehandoff image to a black kernel-native path.
  * See DISPLAY-KNOWN-GOOD-DSI-STATE.md / WHAT-HAS-BEEN-TRIED.md.
+ *
+ * CURRENTLY false ON PURPOSE for the prepare_prev_first cold-init experiment
+ * (paired with ctx->panel.prepare_prev_first = true in probe). This is the
+ * deliberate cold-init diagnostic the warning above refers to. Recovery if the
+ * panel stays black is a reboot to the on-disk image. Set back to true to
+ * restore the known-good U-Boot-handoff display.
  */
-static bool handoff_skip_first_cycle = true;
+static bool handoff_skip_first_cycle = false;
 
 static int generic_panel_unprepare(struct drm_panel *panel)
 {
@@ -546,6 +552,16 @@ static int generic_panel_prepare(struct drm_panel *panel)
     dev_info(ctx->dev, "display_on (cmd-mode) ret=%d\n", dispon_ret);
     msleep(20);
 
+    /*
+     * Diagnostic DCS reads DISABLED for the cold-init experiment.
+     *
+     * Each of these issues a BTA which, on this board's broken short-read path,
+     * returns -EIO and parks the data lanes in stopstate (PHY_STATUS
+     * 0x1f02 -> 0x1f32) -> black. They never run on the handoff path (prepare is
+     * skipped), so they are a cold-init-only confound. Re-enable only once the
+     * short-read path is fixed and we want panel-state observability.
+     */
+#if 0
     {
         u8 power_mode = 0;
         u8 display_status[4] = { 0 };
@@ -565,6 +581,7 @@ static int generic_panel_prepare(struct drm_panel *panel)
         dev_info(ctx->dev, "DCS display ID: ret=%d value=%*ph\n",
                  status_ret, (int)sizeof(id), id);
     }
+#endif
 
     //msleep(ctx->delays.ready);
 
@@ -749,6 +766,27 @@ static int generic_panel_probe(struct mipi_dsi_device *dsi)
 
     drm_panel_init(&ctx->panel, &dsi->dev, &generic_panel_funcs,
                DRM_MODE_CONNECTOR_DSI);
+
+    /*
+     * COLD-INIT EXPERIMENT (see WHAT-HAS-BEEN-TRIED.md "prepare_prev_first").
+     *
+     * The DRM bridge chain is encoder -> sprd_dsi.bridge -> panel_bridge(this).
+     * drm_atomic_bridge_chain_pre_enable() walks the chain in reverse, so by
+     * default THIS panel's prepare (which sends the 144-cmd init sequence) runs
+     * BEFORE sprd_dsi_bridge_pre_enable() has reset/initialised the DSI host or
+     * armed LP command mode -- and sprd_dsi then resets the controller, wiping
+     * whatever the panel just sent. That is the inverted ordering that makes
+     * cold kernel-native init fail while the U-Boot handoff path (which skips
+     * prepare entirely) works.
+     *
+     * Setting prepare_prev_first propagates to pre_enable_prev_first on the
+     * panel bridge (drm/bridge/panel.c), forcing sprd_dsi_bridge_pre_enable()
+     * to run FIRST: controller up + LP command mode armed, THEN this panel's
+     * init DCS -- matching the vendor U-Boot order (controller init, LP cmd
+     * enable, init cmds, video mode, hs clk). Only meaningful with
+     * handoff_skip_first_cycle = false.
+     */
+    ctx->panel.prepare_prev_first = true;
 
     ret = drm_panel_of_backlight(&ctx->panel);
     if (ret)

@@ -999,6 +999,26 @@ static void sprd_dsi_bridge_pre_enable(struct drm_bridge *bridge)
 	dsi_reg_up(ctx, CMD_MODE_CFG, CMD_MODE_LP_CMD_EN, CMD_MODE_LP_CMD_EN);
 
 	/*
+	 * Arm clock-lane auto-HS control BEFORE the panel's prepare runs (it now
+	 * runs after this, via prepare_prev_first). Without the clock lane able
+	 * to engage, the command FIFO never drains and the very first panel init
+	 * write times out ("tx cmd fifo is not empty", -ETIMEDOUT). This used to
+	 * be set only in bridge_enable (after prepare), which is why cold-init
+	 * panel writes failed while the warm rebind path (clock lane already up
+	 * from a prior enable) succeeded. Our panel is MIPI_DSI_CLOCK_NON_-
+	 * CONTINUOUS, so use the auto-clklane path; bridge_enable re-applies the
+	 * matching setting.
+	 */
+	if (dsi->slave->mode_flags & MIPI_DSI_CLOCK_NON_CONTINUOUS) {
+		dsi_reg_up(ctx, PHY_CLK_LANE_LP_CTRL, AUTO_CLKLANE_CTRL_EN,
+			   AUTO_CLKLANE_CTRL_EN);
+	} else {
+		dsi_reg_up(ctx, PHY_CLK_LANE_LP_CTRL, PHY_CLKLANE_TX_REQ_HS,
+			   PHY_CLKLANE_TX_REQ_HS);
+		dphy_wait_pll_locked(ctx);
+	}
+
+	/*
 	 * Initialize in command mode to allow panels to prepare by sending
 	 * DSI commands before the DPU is started.
 	 */
