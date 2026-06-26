@@ -404,11 +404,17 @@ static int generic_panel_init_sequence(struct generic_panel *ctx)
 }
 
 /*
- * Diagnostic: assume u-boot left the panel fully initialized and skip the
- * kernel's first prepare/unprepare cycle. If the panel stays lit, the
- * kernel's panel-side teardown was destroying u-boot's state. Note that
- * sprd_dpu/sprd_dsi still reset themselves -- this only isolates the
- * panel-side contribution. Flip to false to restore normal behavior.
+ * Assume u-boot left the panel fully initialized and skip the kernel's first
+ * prepare/unprepare cycle. The kernel's panel-side teardown was destroying
+ * u-boot's state; skipping it is REQUIRED for the panel to light (build #76:
+ * fbcon visible + boot to Debian login). sprd_dpu/sprd_dsi still reset
+ * themselves -- this only isolates the panel-side contribution.
+ *
+ * DO NOT set this to false except as a deliberate last-resort diagnostic, or
+ * once we are extremely confident the kernel can cold-init the panel without
+ * u-boot's state. Flipping it to false is exactly what regressed the display
+ * from the working #67 prehandoff image to a black kernel-native path.
+ * See DISPLAY-KNOWN-GOOD-DSI-STATE.md / WHAT-HAS-BEEN-TRIED.md.
  */
 static bool handoff_skip_first_cycle = true;
 
