@@ -410,7 +410,7 @@ static int generic_panel_init_sequence(struct generic_panel *ctx)
  * sprd_dpu/sprd_dsi still reset themselves -- this only isolates the
  * panel-side contribution. Flip to false to restore normal behavior.
  */
-static bool handoff_skip_first_cycle = false;
+static bool handoff_skip_first_cycle = true;
 
 static int generic_panel_unprepare(struct drm_panel *panel)
 {
