@@ -497,15 +497,25 @@ static void sprd_dpu_init(struct sprd_dpu *dpu)
 			dpu_reg_set(ctx, REG_DPI_CTRL, BIT_DPU_EDPI_FROM_EXTERNAL_PAD);
 		} else {
 			/*
-			 * Vendor BSP sets BIT_DPU_DPI_HALT_EN here and relies
-			 * on the DSI controller to assert ready back so the
-			 * handshake completes. On this mainline driver every
-			 * reachable DSI-side prerequisite (PHY locked, video
-			 * mode, HS clock, DPI clock prepared) is met yet the
-			 * handshake never completes -- INT_STS stays 0 forever
-			 * and the DPU produces no frames. Until we figure out
-			 * the missing DSI-side piece, leave halt disabled so
-			 * the DPU free-runs and at least pushes pixels.
+			 * Keep BIT_DPU_DPI_HALT_EN CLEARED (free-running DPI), NOT
+			 * set. The vendor BSP sets it so the DPU's DPI output gates
+			 * on the DSI ready/ack handshake, and an earlier session
+			 * re-enabled it on the theory that the flags=3 burst fix
+			 * (lanes now streaming, PHY_STATUS=0x1f02) had finally made
+			 * the handshake completable.
+			 *
+			 * The two captured dmesg logs (2026-06-26,
+			 * good-fbcon-dmesg.log vs bad-fbcon-dmesg.log) disprove that:
+			 *  - The only state that ever lights the panel (U-Boot
+			 *    handoff, fbcon visible) has DPI_CTRL=0x00000000 AND
+			 *    DSI_MODE_CFG=0x0 -- both halt halves OFF, DPU free-runs.
+			 *  - The black kernel-native state had DPI_CTRL=0x00010000
+			 *    (this HALT_EN bit) AND DSI_MODE_CFG=0x2. Both halves on,
+			 *    lanes park in stopstate (PHY_STATUS=0x1f32), no scanout.
+			 * Enabling the halt handshake has produced a black panel on
+			 * every measurement; free-running is the only proven-good
+			 * config. Pair this with DSI_MODE_CFG=0 in sprd_dsi.c
+			 * (sprd_dsi_set_work_mode). See DISPLAY-KNOWN-GOOD-DSI-STATE.md.
 			 */
 			dpu_reg_clr(ctx, REG_DPI_CTRL, BIT_DPU_DPI_HALT_EN);
 		}

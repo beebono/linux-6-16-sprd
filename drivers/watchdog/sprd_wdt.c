@@ -310,6 +310,9 @@ static int sprd_wdt_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to enable wdt\n");
 		return ret;
 	}
+
+	sprd_wdt_stop(&wdt->wdd);
+
 	ret = devm_add_action_or_reset(dev, sprd_wdt_disable, wdt);
 	if (ret) {
 		dev_err(dev, "Failed to add wdt disable action\n");

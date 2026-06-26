@@ -403,6 +403,15 @@ static int generic_panel_init_sequence(struct generic_panel *ctx)
     return 0;
 }
 
+/*
+ * Diagnostic: assume u-boot left the panel fully initialized and skip the
+ * kernel's first prepare/unprepare cycle. If the panel stays lit, the
+ * kernel's panel-side teardown was destroying u-boot's state. Note that
+ * sprd_dpu/sprd_dsi still reset themselves -- this only isolates the
+ * panel-side contribution. Flip to false to restore normal behavior.
+ */
+static bool handoff_skip_first_cycle = false;
+
 static int generic_panel_unprepare(struct drm_panel *panel)
 {
     struct generic_panel *ctx = panel_to_generic_panel(panel);
@@ -411,6 +420,13 @@ static int generic_panel_unprepare(struct drm_panel *panel)
 
     if (!ctx->prepared)
         return 0;
+
+    if (handoff_skip_first_cycle) {
+        handoff_skip_first_cycle = false;
+        ctx->prepared = false;
+        dev_info(ctx->dev, "handoff: skipping first unprepare\n");
+        return 0;
+    }
 
     ret = mipi_dsi_dcs_set_display_off(dsi);
     if (ret < 0)
@@ -449,9 +465,16 @@ static int generic_panel_prepare(struct drm_panel *panel)
      */
     static const u8 sleep_out[] = { MIPI_DCS_EXIT_SLEEP_MODE };
     static const u8 display_on[] = { MIPI_DCS_SET_DISPLAY_ON };
+    int dispon_ret;
     int ret;
 
     if (ctx->prepared) {
+        return 0;
+    }
+
+    if (handoff_skip_first_cycle) {
+        dev_info(ctx->dev, "handoff: skipping first prepare (assuming u-boot left panel live)\n");
+        ctx->prepared = true;
         return 0;
     }
 
@@ -501,6 +524,21 @@ static int generic_panel_prepare(struct drm_panel *panel)
     }
 
     msleep(200);
+
+    /*
+     * Send display_on HERE, in CMD mode, before the bridge switches to
+     * video mode -- matching the vendor BSP which sends sleep_out AND
+     * display_on in cmd mode prior to video. The sprd host .transfer path
+     * does not switch back to cmd mode, so a display_on issued from
+     * .enable (post video-mode switch) is pushed into the command FIFO
+     * while the controller is in VIDEO mode and is not reliably
+     * transmitted -- leaving the panel powered + init'd + sleep-exited but
+     * with its source drivers OFF (pure black, backlight on). The .enable
+     * resend is kept as a harmless belt-and-suspenders.
+     */
+    dispon_ret = mipi_dsi_dcs_write_buffer(dsi, display_on, sizeof(display_on));
+    dev_info(ctx->dev, "display_on (cmd-mode) ret=%d\n", dispon_ret);
+    msleep(20);
 
     {
         u8 power_mode = 0;

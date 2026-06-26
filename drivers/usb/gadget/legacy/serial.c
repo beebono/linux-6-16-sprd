@@ -286,6 +286,13 @@ static int switch_gserial_enable(bool do_enable)
 
 static int __init gserial_init(void)
 {
+	/* Force CDC ACM regardless of cmdline: u-boot's bootargs set
+	 * g_serial.use_acm=0 (SPRD diag uses generic vendor-serial), but we
+	 * want the host to auto-bind cdc-acm and create /dev/ttyACM0.
+	 */
+	use_acm = true;
+	use_obex = false;
+
 	/* We *could* export two configs; that'd be much cleaner...
 	 * but neither of these product IDs was defined that way.
 	 */
