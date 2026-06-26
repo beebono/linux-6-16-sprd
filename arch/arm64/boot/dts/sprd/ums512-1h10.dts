@@ -277,6 +277,17 @@
 
 &usb {
 	status = "okay";
+	/*
+	 * MUST stay "otg". The sprd musb glue only registers the usb_role_switch
+	 * (/sys/class/usb_role/*) when port_mode == MUSB_OTG, and this board has
+	 * no extcon/VBUS session edge -- the PHY force-asserts VBUS. The gadget
+	 * session + D+ pullup are only asserted via sprd_otg_switch_set(DEVICE),
+	 * which the initramfs init triggers by writing "device" to the role
+	 * sysfs. Setting dr_mode="peripheral" removes the role switch, so the
+	 * init dance no-ops and the gadget never asserts its session -> the host
+	 * sees a connect but EP0 is dead (descriptor read error -71). See
+	 * drivers/usb/musb/sprd.c and src/initramfs/init.
+	 */
 	dr_mode = "otg";
 };
 
@@ -290,6 +301,13 @@
 
 /* SD card */
 &sdio0 {
+	/*
+	 * Claim the SD core/IO supplies so the regulator framework keeps them
+	 * powered without relying on regulator_ignore_unused (mirrors the
+	 * working ums512-infinix-x6816d board).
+	 */
+	vmmc-supply = <&vddsdcore>;
+	vqmmc-supply = <&vddsdio>;
 	bus-width = <4>;
 	no-sdio;
 	no-mmc;
@@ -304,6 +322,13 @@
 /* EMMC storage */
 &sdio3 {
 	status = "okay";
+	/*
+	 * Claim the eMMC core supply so it stays powered without
+	 * regulator_ignore_unused (mirrors ums512-infinix-x6816d). This is the
+	 * regulator that, when dropped, kills eMMC and stops userland binaries
+	 * from loading mid-session.
+	 */
+	vmmc-supply = <&vddemmccore>;
 	bus-width = <8>;
 	no-sdio;
 	no-sd;
