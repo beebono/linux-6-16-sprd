@@ -15,6 +15,30 @@
 	compatible = "sprd,ums512-1h10", "sprd,ums512";
 	sprd,sc-id = "ums512 1h10 1000";
 
+	/*
+	 * Battery profile for the RG Rotate cell. Values transcribed from the
+	 * stock dtbo overlay (device/stock/dtbo_decompiled/dtbo_overlay_1.dts,
+	 * the authoritative source for this SKU). Consumed by the SC2730 fuel
+	 * gauge (sc2730_fgu) via monitored-battery.
+	 */
+	bat: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp-hours = <1900000>;
+		charge-term-current-microamp = <120000>;
+		constant-charge-voltage-max-microvolt = <4340000>;
+		factory-internal-resistance-micro-ohms = <230000>;
+		voltage-min-design-microvolt = <3410000>;
+		ocv-capacity-celsius = <25>;
+		ocv-capacity-table-0 = <4338000 100>, <4243000 95>,
+			<4189000 90>, <4143000 85>, <4102000 80>,
+			<4051000 75>, <4002000 70>, <3958000 65>,
+			<3901000 60>, <3840000 55>, <3784000 50>,
+			<3742000 45>, <3703000 40>, <3673000 35>,
+			<3656000 30>, <3622000 25>, <3595000 20>,
+			<3558000 15>, <3523000 10>, <3490000 5>,
+			<3412000 0>;
+	};
+
 	chosen {
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -334,4 +358,67 @@
 	no-sd;
 	non-removable;
 	cap-mmc-hw-reset;
+};
+
+/* SC2730 fuel gauge — battery voltage / capacity reporting */
+&sc2730_fgu {
+	status = "okay";
+	monitored-battery = <&bat>;
+	sprd,calib-resistance-micro-ohms = <10000>;
+};
+
+/*
+ * Battery charger. Stock uses an AW32257 (Awinic) at i2c4 addr 0x6a, which is a
+ * register-level clone of the TI bq24157/bq24158. Probe-test it with the
+ * mainline bq2415x driver. Values transcribed from the stock dtbo overlay
+ * (dtbo_overlay_1.dts charger@6a), converted to the bq2415x binding units
+ * (mA / mV; stock used vendor units of uA for currents, mV for voltages):
+ *   current-limit 2000000uA->1800mA (bq2415x max), charge 2000000uA->2000mA,
+ *   weak-batt 3400mV, batt-reg 4200mV, resistor-sense 33mOhm (0x21).
+ * Termination set to a sane 200mA (stock's 2000mA looks like a vendor copy).
+ */
+/*
+ * i2c4 SCL/SDA are routed onto the SIMCLK2 / SIMDA2 pads at AF1 with
+ * internal pull-ups. Source: vendor u-boot board pinmap
+ * (vendor/u-boot-unisoc-bsp/board/spreadtrum/ums512_1h10/pinmap.c: SIMCLK2 =>
+ * I2C4_SCL, SIMDA2 => I2C4_SDA, both BITS_PIN_AF(1) + WPU). UMS512 has no
+ * dedicated SCL4/SDA4 pads, and the stock pinmux lived in the (neutralized)
+ * dtbo, so it must be set here or the bus never toggles (all xfers -ETIMEDOUT).
+ *
+ * NB: the sprd DT function naming is 1-indexed vs the hardware AF number:
+ * sprd_pmx_set_mux() maps "func1"->AF0, "func2"->AF1, ... (PIN_FUNC_1 clears
+ * the bits). I2C4 is AF1, so the correct string is "func2", NOT "func1".
+ */
+&pinctrl {
+	i2c4_pin_func: i2c4-pin-func {
+		pins = "UMS512_SIMCLK2", "UMS512_SIMDA2";
+		function = "func2";
+	};
+
+	i2c4_pin_misc: i2c4-pin-misc {
+		pins = "UMS512_SIMCLK2_MISC", "UMS512_SIMDA2_MISC";
+		/* 4700 => WPUS|WPU (bit12|bit7), matching the u-boot pinmap; 20000
+		 * would set WPU only. Stronger pull for the open-drain i2c lines. */
+		bias-pull-up = <4700>;
+	};
+};
+
+&i2c4 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4_pin_func &i2c4_pin_misc>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	charger@6a {
+		compatible = "ti,bq24158";
+		reg = <0x6a>;
+		ti,current-limit = <1800>;
+		ti,weak-battery-voltage = <3400>;
+		ti,battery-regulation-voltage = <4200>;
+		ti,charge-current = <2000>;
+		ti,termination-current = <200>;
+		ti,resistor-sense = <33>;
+	};
 };
