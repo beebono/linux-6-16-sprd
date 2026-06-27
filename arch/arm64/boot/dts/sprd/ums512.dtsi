@@ -1140,7 +1140,16 @@
 			compatible = "simple-bus";
 			#address-cells = <2>;
 			#size-cells = <2>;
-			ranges;
+			/*
+			 * AP-APB sits at 0x70000000. Children are addressed as
+			 * offsets into this window (uart@0, i2c@700000, ...), so
+			 * the bus must translate. (sdio nodes below are likewise
+			 * expressed as offsets, e.g. mmc@1100000 -> 0x71100000.)
+			 * A bare identity "ranges;" leaves uart/i2c/spi pointing
+			 * at 0x000xxxxx (DDR) -> the controllers are never reached
+			 * and every transfer / console write hangs.
+			 */
+			ranges = <0x0 0x0 0x0 0x70000000 0x0 0x10000000>;
 
 			uart0: serial@0 {
 				compatible = "sprd,ums512-uart",
@@ -1283,9 +1292,9 @@
 			};
 
 
-			sdio0: mmc@71100000 {
+			sdio0: mmc@1100000 {
 				compatible = "sprd,sdhci-r11";
-				reg = <0 0x71100000 0 0x1000>;
+				reg = <0 0x1100000 0 0x1000>;
 				interrupts = <GIC_SPI 19 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&ap_clk CLK_SDIO0_2X>,
 					 <&apapb_gate CLK_SDIO0_EB>;
@@ -1295,9 +1304,9 @@
 				status = "disabled";
 			};
 
-			sdio1: mmc@71200000 {
+			sdio1: mmc@1200000 {
 				compatible = "sprd,sdhci-r11";
-				reg = <0 0x71200000 0 0x1000>;
+				reg = <0 0x1200000 0 0x1000>;
 				interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>;
 				clock-names = "sdio", "enable";
 				clocks = <&ap_clk CLK_SDIO1_2X>,
@@ -1307,9 +1316,9 @@
 				status = "disabled";
 			};
 
-			sdio3: mmc@71400000 {
+			sdio3: mmc@1400000 {
 				compatible = "sprd,sdhci-r11";
-				reg = <0 0x71400000 0 0x1000>;
+				reg = <0 0x1400000 0 0x1000>;
 				interrupts = <GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&ap_clk CLK_EMMC_2X>,
 					 <&apapb_gate CLK_EMMC_EB>;
