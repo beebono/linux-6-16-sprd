@@ -410,6 +410,7 @@
 
 /* SD card */
 &sdio0 {
+	status = "okay";
 	/*
 	 * Claim the SD core/IO supplies so the regulator framework keeps them
 	 * powered without relying on regulator_ignore_unused (mirrors the
@@ -420,6 +421,14 @@
 	bus-width = <4>;
 	no-sdio;
 	no-mmc;
+	/*
+	 * Stock uses the SD controller's internal hardware card-detect via
+	 * sd-detect-*-syscon registers, but mainline sdhci-sprd sets
+	 * SDHCI_QUIRK_BROKEN_CARD_DETECTION and ignores them. There is no
+	 * dedicated card-detect GPIO on this board (unlike infinix-x6816d's
+	 * eic_sync 19), so fall back to mmc-core polling.
+	 */
+	broken-cd;
 	sprd,phy-delay-sd-uhs-sdr104 = <0x7f 0x73 0x72 0x72>;
 	sprd,phy-delay-sd-uhs-sdr50 = <0x6e 0x7f 0x01 0x01>;
 	sprd,phy-delay-sd-highspeed = <0x7f 0x1a 0x9a 0x9a>;
