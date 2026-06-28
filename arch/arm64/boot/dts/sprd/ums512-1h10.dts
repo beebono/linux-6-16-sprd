@@ -400,12 +400,29 @@
 	dr_mode = "otg";
 };
 
+/*
+ * UARTs. The AP-APB ranges mis-addressing that used to hang the kernel when
+ * uart0 was enabled is now fixed (see the i2c4/charger bring-up), so these are
+ * safe to turn on. This unit has no known broken-out UART pads, so the practical
+ * goal here is just confirming a clean boot with them enabled; serial1 is the
+ * console per /chosen stdout-path.
+ */
 &uart0 {
-	status = "disabled";
+	/*
+	 * sprd_serial wants three named clocks ("uart"/"source"/"enable"); the
+	 * bare dtsi `clocks = <&ext_26m>` matches none, and a non-console port
+	 * treats a missing "enable" gate as fatal (-ENOENT). Wire them per the
+	 * vendor whale.dtsi: divider <&ap_clk CLK_UART0>, 26 MHz source, APB gate.
+	 */
+	clocks = <&ap_clk CLK_UART0>, <&ext_26m>, <&apapb_gate CLK_UART0_EB>;
+	clock-names = "uart", "source", "enable";
+	status = "okay";
 };
 
 &uart1 {
-	status = "disabled";
+	clocks = <&ap_clk CLK_UART1>, <&ext_26m>, <&apapb_gate CLK_UART1_EB>;
+	clock-names = "uart", "source", "enable";
+	status = "okay";
 };
 
 /* SD card */
