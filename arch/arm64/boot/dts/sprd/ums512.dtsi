@@ -1122,6 +1122,50 @@
 			};
 		};
 
+		gpu: gpu@60000000 {
+			compatible = "sprd,ums512-mali", "arm,mali-bifrost";
+			reg = <0 0x60000000 0 0x100000>;
+			interrupts = <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "job", "mmu", "gpu";
+			clocks = <&gpu_clk CLK_GPU_CORE_EB>,
+				 <&gpu_clk CLK_GPU_MEM_EB>,
+				 <&gpu_clk CLK_GPU_SYS_EB>;
+			clock-names = "gpu", "mem", "bus";
+			power-domains = <&pmu UMS512_POWER_DOMAIN_GPU_TOP>;
+			resets = <&gpu_clk RESET_GPU_APB_SYS_SOFT_RST_REQ_CORE>;
+			mali-supply = <&vddgpu>;
+			operating-points-v2 = <&gpu_opp_table>;
+
+			status = "disabled";
+		};
+
+		gpu_opp_table: opp-table-gpu {
+			compatible = "operating-points-v2";
+
+			opp-384000000 {
+				opp-hz = /bits/ 64 <384000000>;
+				opp-microvolt = <700000>;
+			};
+			opp-512000000 {
+				opp-hz = /bits/ 64 <512000000>;
+				opp-microvolt = <750000>;
+			};
+			opp-614400000 {
+				opp-hz = /bits/ 64 <614400000>;
+				opp-microvolt = <750000>;
+			};
+			opp-768000000 {
+				opp-hz = /bits/ 64 <768000000>;
+				opp-microvolt = <800000>;
+			};
+			opp-850000000 {
+				opp-hz = /bits/ 64 <850000000>;
+				opp-microvolt = <800000>;
+			};
+		};
+
 		gpu_dvfs_apb_regs: syscon@60110000 {
 			compatible = "sprd,ums512-glbregs", "syscon",
 				     "simple-mfd";

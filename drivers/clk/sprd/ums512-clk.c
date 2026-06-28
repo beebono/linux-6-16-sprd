@@ -2409,6 +2409,8 @@ static int ums512_clk_probe(struct platform_device *pdev)
 		return ret;
 
 	if (desc->num_resets > 0) {
+		struct sprd_clk_drvdata *data = platform_get_drvdata(pdev);
+
 		reset = devm_kzalloc(&pdev->dev, sizeof(*reset), GFP_KERNEL);
 		if (!reset)
 			return -ENOMEM;
@@ -2418,7 +2420,7 @@ static int ums512_clk_probe(struct platform_device *pdev)
 		reset->rcdev.ops = &sprd_reset_ops;
 		reset->rcdev.nr_resets = desc->num_resets;
 		reset->reset_map = desc->resets;
-		reset->regmap = platform_get_drvdata(pdev);
+		reset->regmap = data->regmap;
 
 		ret = devm_reset_controller_register(&pdev->dev, &reset->rcdev);
 		if (ret) {
