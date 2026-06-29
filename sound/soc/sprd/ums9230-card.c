@@ -164,6 +164,8 @@ static int ums9230_card_probe(struct platform_device *pdev)
 
 static const struct of_device_id ums9230_card_of_match[] = {
 	{ .compatible = "sprd,ums9230-audio-card" },
+	/* Generic card (DAI links are SoC-agnostic VBC FE/IIS names). */
+	{ .compatible = "sprd,ums512-audio-card" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, ums9230_card_of_match);

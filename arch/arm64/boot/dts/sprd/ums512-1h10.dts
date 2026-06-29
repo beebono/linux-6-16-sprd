@@ -533,3 +533,77 @@
 		ti,resistor-sense = <33>;
 	};
 };
+
+/*
+ * Audio external speaker power-amplifiers. Stock wires two Awinic smart PAs
+ * (compatible "awinic,aw87xxx_pa") on i2c2 (i2c@500000): dev_index 0 @ 0x58 and
+ * dev_index 1 @ 0x59 (stock dtbo_overlay_1.dts fragment@4). i2c2 uses dedicated
+ * SCL2/SDA2 pads (no pinmux remux needed, unlike i2c4 on the SIM pads), so the
+ * bus only needs status = "okay" - mirrors ums512-infinix-x6816d.dts.
+ *
+ * This SKU has a single speaker, and an on-device i2c-2 scan confirms only
+ * 0x58 ACKs (0x59 NAKs) - so the two-PA topology is a shared-family overlay
+ * artifact, like the inert analog-joypad axes. Only one PA (dev_index 0) is
+ * populated. Bus left enabled for probing, but note the amp does NOT need the
+ * i2c path: the vendor ASoC hook #if-0's out its i2c PA driver and drives the
+ * speaker purely by GPIO pin-control - GPIO 9 pulsed 4x then held high (classic
+ * aw87xxx single-wire AW_PIN gain-select; "4" = spk-ext-pa-info<0 0 4 0>). So
+ * the i2c node stays commented; a mainline card just needs that GPIO sequence.
+ * (The part is an aw87xxx, not an aw87390 - ID reg 0x00 reads 0xc1 vs the 0x76
+ * the in-tree aw87390 driver requires - but i2c control isn't needed anyway.)
+ */
+&i2c2 {
+	status = "okay";
+	clock-frequency = <400000>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/*
+	 * Single populated Awinic smart PA (dev_index 0). The part is an
+	 * aw87391 (ID reg 0x00 reads 0xc1). Driven by the in-tree aw87391
+	 * shim: GPIO 9 enable + i2c init/on/off register sequence, gated by
+	 * a DAPM PGA event so it powers with the Speaker route.
+	 */
+	speaker_amp: aw87391@58 {
+		compatible = "awinic,aw87391";
+		reg = <0x58>;
+		sound-name-prefix = "Speaker Amp";
+		enable-gpios = <&ap_gpio 9 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* In-PMIC analog codec (sc2730). The external speaker PA taps its HP out. */
+&sc2730_codec {
+	status = "okay";
+};
+
+/ {
+	sound {
+		compatible = "sprd,ums512-audio-card";
+		model = "rg-rotate";
+		sprd,pcm-platform = <&sprd_pcm>;
+		memory-region = <&audio_dma_region>;
+		widgets =
+			"Headphone", "Headphones",
+			"Speaker", "Speaker";
+		pin-switches = "Speaker";
+		audio-routing =
+			"Headphones", "HPL_OUT",
+			"Headphones", "HPR_OUT",
+			"Speaker Amp IN", "HPL_OUT",
+			"Speaker", "Speaker Amp OUT";
+		aux-devs = <&speaker_amp>;
+
+		/* Playback backend: VBC IIS0 -> AGCP digital + sc2730 analog. */
+		iis0-dai-link {
+			link-name = "IIS0";
+			dai-format = "i2s";
+			frame-inversion;
+			sprd,fixed-fmt = <24>;
+
+			codec {
+				sound-dai = <&dig_codec 0>, <&sc2730_codec 0>;
+			};
+		};
+	};
+};

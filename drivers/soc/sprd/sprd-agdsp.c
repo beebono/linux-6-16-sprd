@@ -299,6 +299,13 @@ static void sprd_agdsp_remove(struct platform_device *pdev)
 
 static const struct of_device_id sprd_agdsp_of_match[] = {
 	{ .compatible = "sprd,ums9230-agdsp" },
+	/*
+	 * ums512/sharkl5pro shares the AON-APB AGDSP access register layout
+	 * (REG 0x014C, EN BIT(5)) and the mailbox-channel wakeup scheme,
+	 * verified against the stock dtb (agdsp-access ap_access_ena =
+	 * <&aon_apb 0x14c 0x20>; audio_sipc mboxes = <&mailbox 5>).
+	 */
+	{ .compatible = "sprd,ums512-agdsp" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sprd_agdsp_of_match);

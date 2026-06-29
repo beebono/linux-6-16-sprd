@@ -3,6 +3,7 @@
  * Copyright (C) 2025 Otto Pflüger
  */
 
+#include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -17,8 +18,12 @@
 #define ANA_AUD_EN		BIT(4)
 
 #define AUD_TOPA_CLK_EN		0x0100
+#define AUD_CFGA_SOFT_RST	0x0104
 #define AUD_LP_MODULE_CTRL	0x0108
 #define AUD_AUDIF_CTL0		0x0140
+
+/* AUD_CFGA_SOFT_RST: DAC-post + digital-6.5M AUDIF soft reset */
+#define AUDIF_SOFT_RST_MASK	(BIT(2) | BIT(1))
 
 #define ANA_PMU0	0x1000
 #define ANA_PMU1	0x1004
@@ -271,6 +276,30 @@ static const struct snd_kcontrol_new sc2730_adcr_mixer_ctls[] = {
 	SOC_DAPM_SINGLE("MIC2", ANA_CDC1, 0, 1, 0),
 };
 
+/*
+ * Once the AUDIF clocks are running, pulse the DAC-post / digital-6.5M soft
+ * reset so the PMIC-side AUDIF receiver re-syncs to the aud_top data stream.
+ * Without this the DAC never locks onto incoming samples and just converts
+ * its noise floor (audible hiss regardless of the digital input). The vendor
+ * does this on every codec power-up; mirror it here on the TOPA 6.5M clock.
+ */
+static int sc2730_audif_reset_event(struct snd_soc_dapm_widget *w,
+				    struct snd_kcontrol *kcontrol, int event)
+{
+	struct snd_soc_component *c = snd_soc_dapm_to_component(w->dapm);
+
+	if (event == SND_SOC_DAPM_POST_PMU) {
+		snd_soc_component_update_bits(c, AUD_CFGA_SOFT_RST,
+					      AUDIF_SOFT_RST_MASK,
+					      AUDIF_SOFT_RST_MASK);
+		udelay(10);
+		snd_soc_component_update_bits(c, AUD_CFGA_SOFT_RST,
+					      AUDIF_SOFT_RST_MASK, 0);
+	}
+
+	return 0;
+}
+
 static const struct snd_soc_dapm_widget sc2730_codec_dapm_widgets[] = {
 	SND_SOC_DAPM_AIF_IN("AUDIF_IN", NULL, 0, SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_AIF_OUT("AUDIF_OUT", NULL, 0, SND_SOC_NOPM, 0, 0),
@@ -287,7 +316,8 @@ static const struct snd_soc_dapm_widget sc2730_codec_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("CLK_AUDIF_6M5", SC2730_CLK_EN, 1, 0, NULL, 0),
 	SND_SOC_DAPM_SUPPLY("CLK_AUDIF", SC2730_CLK_EN, 0, 0, NULL, 0),
 
-	SND_SOC_DAPM_SUPPLY("CLK_TOPA_6M5", AUD_TOPA_CLK_EN, 1, 0, NULL, 0),
+	SND_SOC_DAPM_SUPPLY("CLK_TOPA_6M5", AUD_TOPA_CLK_EN, 1, 0,
+			    sc2730_audif_reset_event, SND_SOC_DAPM_POST_PMU),
 	SND_SOC_DAPM_SUPPLY("ADC_EN_R", AUD_LP_MODULE_CTRL, 5, 0, NULL, 0),
 	SND_SOC_DAPM_SUPPLY("DAC_EN_R", AUD_LP_MODULE_CTRL, 4, 0, NULL, 0),
 	SND_SOC_DAPM_SUPPLY("ADC_EN_L", AUD_LP_MODULE_CTRL, 3, 0, NULL, 0),

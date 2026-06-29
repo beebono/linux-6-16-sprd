@@ -149,6 +149,14 @@ static void sprd_pcm_release_dma_channel(struct snd_pcm_substream *substream)
 			dma_release_channel(data->chan);
 			data->chan = NULL;
 		}
+
+		/*
+		 * Prepared descriptors belong to the DMA channel resources and
+		 * become invalid once the channel is released.
+		 */
+		data->desc = NULL;
+		data->cookie = 0;
+		data->pre_pointer = 0;
 	}
 }
 
@@ -207,6 +215,12 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 
 	if (dma_params->hw_channels < channels)
 		channels = dma_params->hw_channels;
+
+	/*
+	 * Drop any stale state left from a prior hw_params/hw_free cycle
+	 * before requesting fresh channels and descriptors.
+	 */
+	sprd_pcm_release_dma_channel(substream);
 
 	ret = sprd_pcm_request_dma_channel(component, substream, dma_params,
 					   channels);
@@ -323,12 +337,20 @@ static int sprd_pcm_trigger(struct snd_soc_component *component,
 			if (!data->desc)
 				continue;
 
+			if (data->cookie > 0) {
+				dev_warn(component->dev,
+					 "ignoring duplicate START on ch%d cookie=%d desc=%p\n",
+					 i, data->cookie, data->desc);
+				continue;
+			}
+
 			data->cookie = dmaengine_submit(data->desc);
 			ret = dma_submit_error(data->cookie);
 			if (ret) {
 				dev_err(component->dev,
 					"failed to submit dma request: %d\n",
 					ret);
+				data->cookie = 0;
 				return ret;
 			}
 
@@ -397,11 +419,30 @@ static snd_pcm_uframes_t sprd_pcm_pointer(struct snd_soc_component *component,
 		}
 
 		/*
-		 * We just get current transfer address from the DMA engine, so
-		 * we need convert to current pointer.
+		 * Spreadtrum DMA status is not fully DMAengine-conformant here:
+		 * depending on the descriptor state, tx_status() may hand back
+		 * either a current DMA address or a byte residue/count. Accept
+		 * both forms and reject anything outside the current buffer.
 		 */
-		pointer[i] = state.residue - runtime->dma_addr -
-			i * dma_private->dma_addr_offset;
+		if (state.residue <= runtime->dma_bytes) {
+			pointer[i] = runtime->dma_bytes - state.residue;
+			if (pointer[i] == runtime->dma_bytes)
+				pointer[i] = 0;
+		} else if (state.residue >= runtime->dma_addr +
+					i * dma_private->dma_addr_offset &&
+			   state.residue < runtime->dma_addr +
+					(i + 1) * dma_private->dma_addr_offset) {
+			pointer[i] = state.residue - runtime->dma_addr -
+				i * dma_private->dma_addr_offset;
+		} else {
+			/*
+			 * Out-of-range status (typically residue == buffer base
+			 * for the single-channel cyclic case): report position 0.
+			 * This is a benign tx_status() reporting quirk, so stay
+			 * quiet instead of spamming the console.
+			 */
+			return 0;
+		}
 
 		if (i == 0) {
 			bytes_of_pointer = pointer[i];

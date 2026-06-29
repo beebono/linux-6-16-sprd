@@ -23,6 +23,16 @@ dma_cookie_t vchan_tx_submit(struct dma_async_tx_descriptor *tx)
 	unsigned long flags;
 	dma_cookie_t cookie;
 
+	if (!tx->chan) {
+		return -EINVAL;
+	}
+
+	if (!vd->node.next || !vd->node.prev)
+		return -EINVAL;
+
+	if (!vc->desc_submitted.next || !vc->desc_submitted.prev)
+		return -EINVAL;
+
 	spin_lock_irqsave(&vc->lock, flags);
 	cookie = dma_cookie_assign(tx);
 

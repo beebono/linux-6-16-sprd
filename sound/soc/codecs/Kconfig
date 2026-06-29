@@ -56,6 +56,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_AUDIO_IIO_AUX
 	imply SND_SOC_AW8738
 	imply SND_SOC_AW87390
+	imply SND_SOC_AW87391
 	imply SND_SOC_AW88395
 	imply SND_SOC_AW88081
 	imply SND_SOC_AW88166
@@ -732,6 +733,15 @@ config SND_SOC_AW87390
 	  the musical output dynamic range, enhance the overall
 	  sound quality, which is a new high efficiency, low
 	  noise, constant large volume, 6th Smart K audio amplifier.
+
+config SND_SOC_AW87391
+	tristate "Soc Audio for awinic aw87391"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Enable a minimal shim driver for the Awinic aw87391 smart
+	  speaker amplifier (i2c register poker + DAPM enable widget).
+	  Used on the RG Rotate (ums512) single-speaker output stage.
 
 config SND_SOC_AW88399
 	tristate "Soc Audio for awinic aw88399"

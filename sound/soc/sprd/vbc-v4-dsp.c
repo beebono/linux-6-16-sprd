@@ -36,6 +36,9 @@ struct sprd_vbc_priv {
 	struct vbc_startup_params params;
 	u32 iis_lrmod[VBC_NUM_IIS_PORT_IDS];
 	u32 iis_rx[VBC_NUM_IIS_PORT_IDS];
+	u32 iis_master_en;
+	u32 iis_master_width;
+	u32 mst_sel[VBC_NUM_IIS_CONTROLLERS];
 	u32 current_fe_tx[VBC_NUM_TX_IDS];
 	u32 current_fe_rx[VBC_NUM_RX_IDS];
 	u8 voice_mute;
@@ -459,7 +462,158 @@ static int vbc_mixer_mode_put(struct snd_kcontrol *kcontrol,
 				   sizeof(struct vbc_mixer_ctrl));
 }
 
+/*
+ * DSP-side VBC IIS master clock.
+ *
+ * On UMS512 the IIS0 BCLK/LRCLK that paces samples out to the AON digital
+ * codec is generated inside the AGCP/DSP, not by the codec (the vendor's AON
+ * "virt mclk" path is a no-op stub on this SoC). The AGDSP firmware only does
+ * so when the AP asks it to via these kcontrols; without them IIS0 stays in
+ * slave/external mode and the DSP free-runs into an unclocked interface. Mirror
+ * the vendor controls so the master can be selected (internal) and started.
+ */
+static int vbc_iis_master_en_get(struct snd_kcontrol *kcontrol,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+
+	ucontrol->value.integer.value[0] = vbc->iis_master_en;
+
+	return 0;
+}
+
+static int vbc_iis_master_en_put(struct snd_kcontrol *kcontrol,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+	struct vbc_iis_master_ctrl params = {
+		.vbc_startup_reload = 0,
+		.enable = ucontrol->value.integer.value[0],
+	};
+
+	vbc->iis_master_en = params.enable;
+
+	/*
+	 * Carry the master state in the startup params with reload=1 so the
+	 * AGDSP (re)applies it every time a stream starts. The firmware does
+	 * not honor a bare live KCTL set on this build, so the startup path is
+	 * the one that matters; we still send the live command for parity.
+	 */
+	vbc->params.iis_master.vbc_startup_reload = 1;
+	vbc->params.iis_master.enable = params.enable;
+
+	return sprd_agdsp_send_cmd(vbc->ipc, AGDSP_CH_VBC_CTL,
+				   VBC_DSP_IO_KCTL_SET, VBC_CTL_IIS_MASTER_START,
+				   -1, &params, sizeof(params));
+}
+
+static int vbc_iis_master_width_get(struct snd_kcontrol *kcontrol,
+				    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+
+	ucontrol->value.integer.value[0] = vbc->iis_master_width;
+
+	return 0;
+}
+
+static int vbc_iis_master_width_put(struct snd_kcontrol *kcontrol,
+				    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+	u32 width = ucontrol->value.integer.value[0];
+
+	vbc->iis_master_width = width;
+
+	return sprd_agdsp_send_cmd(vbc->ipc, AGDSP_CH_VBC_CTL,
+				   VBC_DSP_IO_KCTL_SET,
+				   VBC_CTL_IIS_MASTER_WIDTH_SET,
+				   -1, &width, sizeof(width));
+}
+
+static int vbc_iis_mst_sel_get(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+
+	ucontrol->value.integer.value[0] = vbc->mst_sel[mc->shift];
+
+	return 0;
+}
+
+static int vbc_iis_mst_sel_put(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+	u32 value = ucontrol->value.integer.value[0];
+
+	vbc->mst_sel[mc->shift] = value;
+
+	/* Carried in the startup params (applied at stream start). */
+	vbc->params.mst_sel[mc->shift].id = mc->shift;
+	vbc->params.mst_sel[mc->shift].value = value;
+
+	/* mst_type: 0 = external, 1 = internal (DSP generates the clock) */
+	return vbc_cmd_set_ctrl(vbc, VBC_CTL_EXT_INNER_IIS_MST_SEL,
+				mc->shift, value);
+}
+
+/*
+ * DAC output source mux. Selects where the AON DAC pulls its samples from:
+ * 0 = from an external IIS port, 1 = from VBCIF (the internal VBC->DAC path
+ * used for the on-board speaker). Mainline never set this, so the firmware
+ * defaulted DAC0 to the (unclocked, empty) IIS source. Carry it in the
+ * startup params (tx_out[]) so it is applied when the stream starts.
+ */
+static int vbc_dac_out_get(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+
+	ucontrol->value.integer.value[0] = vbc->params.tx_out[mc->shift].value;
+
+	return 0;
+}
+
+static int vbc_dac_out_put(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
+	u32 value = ucontrol->value.integer.value[0];
+
+	vbc->params.tx_out[mc->shift].id = mc->shift;
+	vbc->params.tx_out[mc->shift].value = value;
+
+	return vbc_cmd_set_ctrl(vbc, VBC_CTL_MUX_DAC_OUT, mc->shift, value);
+}
+
 static const struct snd_kcontrol_new sprd_vbc_controls[] = {
+	SOC_SINGLE_EXT("VBC DAC0 Out VBCIF", SND_SOC_NOPM, 0, 1, 0,
+		       vbc_dac_out_get, vbc_dac_out_put),
+
+	SOC_SINGLE_EXT("VBC IIS Master Enable", SND_SOC_NOPM, 0, 1, 0,
+		       vbc_iis_master_en_get, vbc_iis_master_en_put),
+	SOC_SINGLE_EXT("VBC IIS Master Width 24bit", SND_SOC_NOPM, 0, 1, 0,
+		       vbc_iis_master_width_get, vbc_iis_master_width_put),
+	SOC_SINGLE_EXT("VBC IIS0 Master Internal", SND_SOC_NOPM, 0, 1, 0,
+		       vbc_iis_mst_sel_get, vbc_iis_mst_sel_put),
+
 	SOC_SINGLE_EXT("Voice Mute Uplink", SND_SOC_NOPM, 0, 1, 0,
 		       vbc_voice_mute_get,
 		       vbc_voice_mute_put),
@@ -1134,6 +1288,8 @@ static void sprd_vbc_remove(struct platform_device *pdev)
 
 static const struct of_device_id sprd_vbc_of_match[] = {
 	{ .compatible = "sprd,ums9230-vbc" },
+	/* IPC-only (no MMIO): same AGDSP VBC_CTL ABI as ums9230. */
+	{ .compatible = "sprd,ums512-vbc" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sprd_vbc_of_match);

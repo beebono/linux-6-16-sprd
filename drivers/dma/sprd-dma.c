@@ -972,6 +972,7 @@ sprd_dma_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 	dma_addr_t start_src = 0, start_dst = 0;
 	struct sprd_dma_desc *sdesc;
 	struct scatterlist *sg;
+	unsigned long tx_flags = DMA_CTRL_ACK;
 	u32 len = 0;
 	int ret, i;
 
@@ -1038,7 +1039,36 @@ sprd_dma_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 		return NULL;
 	}
 
-	return vchan_tx_prep(&schan->vc, &sdesc->vd, flags);
+	/*
+	 * The incoming flags include Spreadtrum-specific hardware request /
+	 * trigger / interrupt mode bits. Keep those out of the generic
+	 * DMAengine descriptor flags so virt-dma does not interpret them as
+	 * unrelated control bits.
+	 */
+	if (flags & SPRD_DMA_INT_TYPE_MASK)
+		tx_flags |= DMA_PREP_INTERRUPT;
+
+	{
+		struct dma_async_tx_descriptor *tx;
+
+		tx = vchan_tx_prep(&schan->vc, &sdesc->vd, tx_flags);
+		if (!tx) {
+			kfree(sdesc);
+			return NULL;
+		}
+
+		if (!tx->chan) {
+			kfree(sdesc);
+			return NULL;
+		}
+
+		if (!tx->tx_submit) {
+			kfree(sdesc);
+			return NULL;
+		}
+
+		return tx;
+	}
 }
 
 static int sprd_dma_slave_config(struct dma_chan *chan,

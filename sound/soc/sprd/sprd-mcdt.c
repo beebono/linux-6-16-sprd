@@ -889,6 +889,7 @@ static const struct dev_pm_ops sprd_mcdt_pm_ops = {
 static const struct of_device_id sprd_mcdt_of_match[] = {
 	{ .compatible = "sprd,sc9860-mcdt", .data = &sprd_mcdt_r1_info },
 	{ .compatible = "sprd,ums9230-mcdt", .data = &sprd_mcdt_r2_info },
+	{ .compatible = "sprd,ums512-mcdt", .data = &sprd_mcdt_r1_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sprd_mcdt_of_match);
